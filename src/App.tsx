@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { 
   Building2, 
   Send, 
@@ -38,6 +39,7 @@ import {
   Check,
   LogOut
 } from "lucide-react";
+import ConfirmationDialog from "./components/ConfirmationDialog";
 import { Service, IGAccount, Campaign, Contact, DailyStat, Message } from "./types";
 import CalendarView from "./components/CalendarView";
 import WebhookAndDbView from "./components/WebhookAndDbView";
@@ -69,6 +71,7 @@ export default function App() {
   // CRM State
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState<{ isOpen: boolean, status: "lost" | "qualified" | "contacted" | "new" | null }>({ isOpen: false, status: null });
   const [crmSearch, setCrmSearch] = useState<string>("");
   const [crmFilter, setCrmFilter] = useState<string>("all");
   const [simulatorMessage, setSimulatorMessage] = useState<string>("");
@@ -328,9 +331,15 @@ export default function App() {
   };
 
   // --- CRM & Interactive Simulator Actions ---
-  const handleBulkStatusUpdate = async (newStatus: "lost" | "qualified" | "contacted" | "new") => {
+  const handleBulkStatusUpdate = (newStatus: "lost" | "qualified" | "contacted" | "new") => {
     if (selectedContactIds.size === 0) return;
+    setBulkConfirm({ isOpen: true, status: newStatus });
+  };
+
+  const executeBulkStatusUpdate = async () => {
+    if (!bulkConfirm.status || selectedContactIds.size === 0) return;
     
+    const newStatus = bulkConfirm.status;
     const idsToUpdate = Array.from(selectedContactIds);
     setLoading(true);
     try {
@@ -351,6 +360,7 @@ export default function App() {
       triggerActionNotice("Error performing bulk update", "error");
     } finally {
       setLoading(false);
+      setBulkConfirm({ isOpen: false, status: null });
     }
   };
 
@@ -550,6 +560,13 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-navy-900 text-slate-100 font-sans overflow-hidden">
+      <ConfirmationDialog 
+        isOpen={bulkConfirm.isOpen}
+        onClose={() => setBulkConfirm({ isOpen: false, status: null })}
+        onConfirm={executeBulkStatusUpdate}
+        message={`¿Estás seguro de que deseas cambiar el status de ${selectedContactIds.size} contactos a '${bulkConfirm.status}'? Esta acción es irreversible.`}
+      />
+
       
       {/* Action Banner Toast */}
       {actionNotice && (
@@ -1386,75 +1403,86 @@ export default function App() {
 
                   {/* List */}
                   <div className="flex-1 overflow-y-auto divide-y divide-[#1e2d44]/30">
-                    {filteredContacts.map(c => {
-                      const isSelected = selectedContact?.id === c.id;
-                      const isChecked = selectedContactIds.has(c.id);
-                      const srv = services.find(s => s.id === c.serviceId);
-                      return (
-                        <div 
-                          key={c.id}
-                          className={`p-4 transition-colors relative ${
-                            isSelected ? "bg-[#142036]" : "hover:bg-[#0e1422]/50"
-                          }`}
-                        >
-                          <div className="flex items-start gap-3">
-                            <input 
-                              type="checkbox" 
-                              checked={isChecked}
-                              onChange={(e) => {
-                                const newSet = new Set(selectedContactIds);
-                                if (e.target.checked) newSet.add(c.id);
-                                else newSet.delete(c.id);
-                                setSelectedContactIds(newSet);
-                              }}
-                              className="w-3.5 h-3.5 mt-0.5 rounded border-slate-600 bg-transparent text-cyan-500"
-                            />
-                            <div 
-                              className="flex-1 cursor-pointer"
-                              onClick={() => {
-                                setSelectedContact(c);
-                                setSimulatorMessage("");
-                              }}
-                            >
-                              <div className="flex items-start justify-between">
-                                <div>
-                                  <p className="text-xs font-mono text-slate-400 font-semibold">{highlightText(c.handle, crmSearch)}</p>
-                                  <h4 className="text-sm font-display font-bold text-white mt-0.5">{highlightText(c.name, crmSearch)}</h4>
-                                  <p className="text-[10px] text-slate-500">{c.businessType}</p>
-                                </div>
-                            
-                                <div className="flex flex-col items-end gap-1">
-                                  <span className={`text-[9px] font-display font-bold px-2 py-0.5 rounded-full border ${
-                                    c.status === "scheduled"
-                                      ? "text-amber-400 bg-amber-400/10 border-amber-400/20"
-                                      : c.status === "qualified"
-                                      ? "text-purple-400 bg-purple-400/10 border-purple-400/20"
-                                      : c.status === "lost"
-                                      ? "text-rose-400 bg-rose-400/10 border-rose-400/20"
-                                      : "text-slate-400 bg-slate-400/10 border-slate-500/20"
-                                  }`}>
-                                    {c.status === "scheduled" ? "Agendado" : c.status === "qualified" ? "Calificado" : c.status === "lost" ? "Fallo" : "Prospecto"}
-                                  </span>
-                                  <span className="text-[9px] text-slate-600 font-mono">{c.lastContact}</span>
-                                </div>
-                              </div>
+                    <AnimatePresence mode="popLayout">
+                      {filteredContacts.map(c => {
+                        const isSelected = selectedContact?.id === c.id;
+                        const isChecked = selectedContactIds.has(c.id);
+                        const srv = services.find(s => s.id === c.serviceId);
+                        return (
+                          <motion.div
+                            key={c.id}
+                            layout
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            transition={{ duration: 0.2 }}
+                            className={`p-4 transition-colors relative ${
+                              isSelected ? "bg-[#142036]" : "hover:bg-[#0e1422]/50"
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  const newSet = new Set(selectedContactIds);
+                                  if (e.target.checked) newSet.add(c.id);
+                                  else newSet.delete(c.id);
+                                  setSelectedContactIds(newSet);
+                                }}
+                                className="w-3.5 h-3.5 mt-0.5 rounded border-slate-600 bg-transparent text-cyan-500"
+                              />
+                              <div
+                                className="flex-1 cursor-pointer"
+                                onClick={() => {
+                                  setSelectedContact(c);
+                                  setSimulatorMessage("");
+                                }}
+                              >
+                                <div className="flex items-start justify-between">
+                                  <div>
+                                    <p className="text-xs font-mono text-slate-400 font-semibold">{highlightText(c.handle, crmSearch)}</p>
+                                    <h4 className="text-sm font-display font-bold text-white mt-0.5">{highlightText(c.name, crmSearch)}</h4>
+                                    <p className="text-[10px] text-slate-500">{c.businessType}</p>
+                                  </div>
 
-                              {srv && (
-                                <div className="mt-2.5 flex items-center gap-1.5">
-                                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: srv.color }} />
-                                  <span className="text-[9px] text-slate-500 uppercase tracking-wider">{srv.name}</span>
+                                  <div className="flex flex-col items-end gap-1">
+                                    <span className={`text-[9px] font-display font-bold px-2 py-0.5 rounded-full border ${
+                                      c.status === "scheduled"
+                                        ? "text-amber-400 bg-amber-400/10 border-amber-400/20"
+                                        : c.status === "qualified"
+                                        ? "text-purple-400 bg-purple-400/10 border-purple-400/20"
+                                        : c.status === "lost"
+                                        ? "text-rose-400 bg-rose-400/10 border-rose-400/20"
+                                        : "text-slate-400 bg-slate-400/10 border-slate-500/20"
+                                    }`}>
+                                      {c.status === "scheduled" ? "Agendado" : c.status === "qualified" ? "Calificado" : c.status === "lost" ? "Fallo" : "Prospecto"}
+                                    </span>
+                                    <span className="text-[9px] text-slate-600 font-mono">{c.lastContact}</span>
+                                  </div>
                                 </div>
-                              )}
+
+                                {srv && (
+                                  <div className="mt-2.5 flex items-center gap-1.5">
+                                    <span className="w-1.5 h-1.5 rounded-full" style={{ background: srv.color }} />
+                                    <span className="text-[9px] text-slate-500 uppercase tracking-wider">{srv.name}</span>
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    
+                          </motion.div>
+                        );
+                      })}
+                    </AnimatePresence>
+
                     {filteredContacts.length === 0 && (
-                      <div className="p-8 text-center text-slate-500 text-xs font-display">
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="p-8 text-center text-slate-500 text-xs font-display"
+                      >
                         No se encontraron contactos en tu CRM.
-                      </div>
+                      </motion.div>
                     )}
                   </div>
                 </div>
