@@ -40,8 +40,12 @@ import {
 import { Service, IGAccount, Campaign, Contact, DailyStat, Message } from "./types";
 import CalendarView from "./components/CalendarView";
 import WebhookAndDbView from "./components/WebhookAndDbView";
+import ContactNotesEditor from "./components/ContactNotesEditor";
+import Login from "./components/Login";
+import { supabase } from "./lib/supabase";
 
 export default function App() {
+  const [session, setSession] = useState<any>(null);
   const [activeTab, setActiveView] = useState<"dashboard" | "campanias" | "catalogo" | "crm" | "reportes" | "calendario" | "webhooks">("dashboard");
   
   // App States synchronized with standard Backend Store
@@ -150,8 +154,24 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchAllData();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (session) {
+        fetchAllData();
+    }
+  }, [session]);
 
   const triggerActionNotice = (message: string, type: "success" | "error" | "info" = "success") => {
     setActionNotice({ message, type });
@@ -503,6 +523,10 @@ export default function App() {
       </span>
     );
   };
+
+  if (!session) {
+    return <Login />;
+  }
 
   return (
     <div className="flex h-screen bg-navy-900 text-slate-100 font-sans overflow-hidden">
@@ -1457,12 +1481,10 @@ export default function App() {
                           {/* Quick editable Notes area */}
                           <div className="space-y-1">
                             <span className="text-[10px] font-display font-semibold text-slate-400 block uppercase tracking-wider">Notas de Operador:</span>
-                            <textarea 
-                              value={selectedContact.notes || ""} 
-                              onChange={e => handleSaveContactNotes(selectedContact.id, e.target.value)}
-                              placeholder="Escribe detalles del lead o notas de seguimiento (Guarda automáticamente)..."
-                              rows={2}
-                              className="w-full bg-[#142036]/60 border border-[#1e2d44] rounded-xl px-2 py-1.5 text-xs text-slate-350 focus:outline-none focus:border-cyan-500 transition resize-none leading-relaxed"
+                            <ContactNotesEditor
+                              contactId={selectedContact.id}
+                              initialNotes={selectedContact.notes || ""}
+                              onSave={handleSaveContactNotes}
                             />
                           </div>
 
