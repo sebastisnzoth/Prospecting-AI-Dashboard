@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import dotenv from "dotenv";
 import fs from "fs";
+import cors from "cors"; // Add this
 import { GoogleGenAI, Type } from "@google/genai";
 import { createServer as createViteServer } from "vite";
 import { INITIAL_SERVICES, INITIAL_ACCOUNTS, INITIAL_CAMPAIGNS, INITIAL_CONTACTS, INITIAL_DAILY_STATS } from "./src/data";
@@ -14,6 +15,7 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
+app.use(cors()); // Use CORS
 app.use(express.json({ limit: "50mb" }));
 
 // Initialize Supabase Client if env vars are present

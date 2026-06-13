@@ -83,3 +83,11 @@ export interface WebhookEvent {
   apiResponse?: any;
 }
 
+export interface MessageTemplate {
+  id: string;
+  name: string;
+  content: string;
+  userId?: string;
+  createdAt: string;
+}
+
