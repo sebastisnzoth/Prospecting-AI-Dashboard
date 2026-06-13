@@ -1,0 +1,87 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Follow-up automático de leads inactivos
+#
+# Se ejecuta cada hora y re-engancha prospectos que no respondieron en > 24h.
+# URL del endpoint: https://ftyvtfnvechetczhcbfe.supabase.co/functions/v1/follow-up
+#
+# Secrets necesarios en GitHub (Settings → Secrets → Actions):
+#   SUPABASE_CRON_SECRET → cualquier string aleatorio (ej: openssl rand -hex 32)
+#                          Agrégalo también en Supabase como env var CRON_SECRET
+# ──────────────────────────────────────────────────────────────────────────────
+name: Follow-up leads inactivos
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # cada hora en punto (UTC)
+
+  # Permite disparar manualmente desde la UI de GitHub Actions
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Modo prueba (no envía mensajes reales)"
+        type: boolean
+        default: false
+      campaign_id:
+        description: "UUID de campaña específica (dejar vacío = todas)"
+        required: false
+        default: ""
+
+jobs:
+  follow-up:
+    name: Procesar leads inactivos
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Llamar follow-up endpoint
+        id: call
+        run: |
+          # Construir body JSON
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          CAMPAIGN_ID="${{ github.event.inputs.campaign_id }}"
+
+          if [ -n "$CAMPAIGN_ID" ]; then
+            BODY="{\"dry_run\":${DRY_RUN},\"campaign_id\":\"${CAMPAIGN_ID}\"}"
+          else
+            BODY="{\"dry_run\":${DRY_RUN}}"
+          fi
+
+          echo "Body: $BODY"
+
+          # Llamar al endpoint
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            --max-time 60 \
+            -X POST \
+            "https://ftyvtfnvechetczhcbfe.supabase.co/functions/v1/follow-up" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+
+          HTTP_STATUS=$(echo "$RESPONSE" | tail -n1)
+          BODY_RESPONSE=$(echo "$RESPONSE" | head -n -1)
+
+          echo "HTTP status: $HTTP_STATUS"
+          echo "Response: $BODY_RESPONSE"
+
+          # Extraer métricas del JSON
+          PROCESSED=$(echo "$BODY_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('processed',0))" 2>/dev/null || echo "0")
+          echo "Follow-ups enviados: $PROCESSED"
+          echo "processed=$PROCESSED" >> $GITHUB_OUTPUT
+
+          # Fallar si status != 200
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ Error: HTTP $HTTP_STATUS"
+            exit 1
+          fi
+
+          echo "✅ Completado — $PROCESSED follow-ups enviados"
+
+      - name: Resumen
+        if: always()
+        run: |
+          echo "### Follow-up cron 📊" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Campo | Valor |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Hora de ejecución | $(date -u '+%Y-%m-%d %H:%M UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Follow-ups procesados | ${{ steps.call.outputs.processed || 0 }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Estado | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY

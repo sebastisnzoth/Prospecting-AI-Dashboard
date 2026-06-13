@@ -1,0 +1,6 @@
+{
+  "name": "Prospecting AI Dashboard",
+  "description": "A complete automated prospecting system with an AI-powered control panel managing campaigns, CRM, service catalog, report analytics, and intelligent automatic message qualification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
