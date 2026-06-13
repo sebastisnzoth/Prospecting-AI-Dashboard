@@ -65,14 +65,40 @@ export default function WebhookAndDbView({
   const [showSQL, setShowSQL] = useState<boolean>(false);
   const [copiedSQL, setCopiedSQL] = useState<boolean>(false);
 
+  // Supabase migration/sync local states
+  const [syncing, setSyncing] = useState<boolean>(false);
+  const [syncResult, setSyncResult] = useState<any | null>(null);
+
+  const handleSyncToSupabase = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const response = await fetch("/api/supabase/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setSyncResult(data);
+        triggerNotification(data.message, "success");
+      } else {
+        triggerNotification(data.message || "Fallo en la sincronización con Supabase.", "error");
+      }
+    } catch (error) {
+      triggerNotification("Error de red intentando conectar con el servidor local", "error");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   // Pre-formatted SQL schema string matching Supabase documentation in manual
   const supabaseSQLCode = `-- ─────────────────────────────────────────────────────────────
--- SISTEMA DE PROSPECCIÓN AUTOMATIZADA CON IA (SUPABASE DDL)
+-- SISTEMA DE PROSPECCIÓN AUTOMATIZADA CON IA (SUPABASE DDL COMPLETO)
 -- ─────────────────────────────────────────────────────────────
 
 -- 1. Catálogo de Servicios
 CREATE TABLE IF NOT EXISTS services (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  id VARCHAR(100) PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   ai_prompt TEXT NOT NULL,
   calendar_url VARCHAR(255) NOT NULL,
@@ -81,27 +107,9 @@ CREATE TABLE IF NOT EXISTS services (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 2. CRM de Contactos y Estado Conversacional
-CREATE TABLE IF NOT EXISTS contacts (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  ig_handle VARCHAR(100) NOT NULL,
-  name VARCHAR(255),
-  status VARCHAR(50) DEFAULT 'new', -- new | contacted | qualified | scheduled | closed | lost
-  conv_stage VARCHAR(50) DEFAULT 'intro', -- intro | q1 | q2 | q3 | closing | done
-  conv_answers JSONB DEFAULT '{}'::jsonb,
-  conv_summary TEXT,
-  objections TEXT[] DEFAULT '{}',
-  appointment_at TIMESTAMP WITH TIME ZONE,
-  service_id UUID REFERENCES services(id) ON DELETE SET NULL,
-  notes TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  last_contact_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  CONSTRAINT unique_handle_service UNIQUE(ig_handle, service_id)
-);
-
--- 3. Cuentas Satélites de Instagram
+-- 2. Cuentas Satélites de Instagram
 CREATE TABLE IF NOT EXISTS ig_accounts (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  id VARCHAR(100) PRIMARY KEY,
   handle VARCHAR(100) NOT NULL UNIQUE,
   status VARCHAR(50) DEFAULT 'active', -- active | limited | banned
   daily_limit INT DEFAULT 80,
@@ -109,10 +117,51 @@ CREATE TABLE IF NOT EXISTS ig_accounts (
   reset_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 4. Métricas Diarias para Reportes de Control
+-- 3. Campañas de Outreach
+CREATE TABLE IF NOT EXISTS campaigns (
+  id VARCHAR(100) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  service_id VARCHAR(100) REFERENCES services(id) ON DELETE CASCADE,
+  status VARCHAR(50) DEFAULT 'paused', -- running | paused | stopped
+  messages_sent INT DEFAULT 0,
+  replies INT DEFAULT 0,
+  qualified INT DEFAULT 0,
+  scheduled INT DEFAULT 0,
+  initial_message TEXT,
+  start_date DATE DEFAULT CURRENT_DATE,
+  last_active VARCHAR(100) DEFAULT 'Justo ahora'
+);
+
+-- 4. Tabla de Unión Campañas <-> Cuentas Satélite
+CREATE TABLE IF NOT EXISTS campaign_accounts (
+  campaign_id VARCHAR(100) REFERENCES campaigns(id) ON DELETE CASCADE,
+  account_id VARCHAR(100) REFERENCES ig_accounts(id) ON DELETE CASCADE,
+  PRIMARY KEY (campaign_id, account_id)
+);
+
+-- 5. CRM de Contactos y Estado Conversacional
+CREATE TABLE IF NOT EXISTS contacts (
+  id VARCHAR(100) PRIMARY KEY,
+  ig_handle VARCHAR(100) NOT NULL,
+  name VARCHAR(255),
+  status VARCHAR(50) DEFAULT 'new', -- new | contacted | qualified | scheduled | closed | lost
+  conv_stage VARCHAR(50) DEFAULT 'intro', -- intro | q1 | q2 | q3 | closing | done | lost
+  conv_answers JSONB DEFAULT '{}'::jsonb,
+  conv_summary TEXT,
+  objections TEXT[] DEFAULT '{}',
+  appointment_at TIMESTAMP WITH TIME ZONE,
+  service_id VARCHAR(100) REFERENCES services(id) ON DELETE SET NULL,
+  campaign_id VARCHAR(100) REFERENCES campaigns(id) ON DELETE SET NULL,
+  notes TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  last_contact_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  CONSTRAINT unique_handle_service UNIQUE(ig_handle, service_id)
+);
+
+-- 6. Métricas Diarias para Reportes de Control
 CREATE TABLE IF NOT EXISTS daily_stats (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  campaign_id UUID NOT NULL,
+  campaign_id VARCHAR(100) REFERENCES campaigns(id) ON DELETE CASCADE,
   date DATE DEFAULT CURRENT_DATE,
   sent INT DEFAULT 0,
   replies INT DEFAULT 0,
@@ -122,15 +171,20 @@ CREATE TABLE IF NOT EXISTS daily_stats (
   CONSTRAINT unique_campaign_date_stat UNIQUE(campaign_id, date)
 );
 
--- 5. Registro de Eventos Raw de Webhook
+-- 7. Registro de Eventos Raw de Webhook
 CREATE TABLE IF NOT EXISTS webhook_events (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  payload JSONB NOT NULL,
-  processed BOOLEAN DEFAULT false,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+  id VARCHAR(100) PRIMARY KEY,
+  ig_handle VARCHAR(100),
+  message TEXT,
+  account_id VARCHAR(100),
+  campaign_id VARCHAR(100),
+  timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  status VARCHAR(50) DEFAULT 'processed',
+  error TEXT,
+  api_response JSONB
 );
 
--- 6. Función para reset automático de límites diarios
+-- 8. Función para reset automático de límites diarios
 CREATE OR REPLACE FUNCTION reset_daily_sent()
 RETURNS void AS $$
 BEGIN
@@ -264,6 +318,59 @@ $$ LANGUAGE plpgsql;`;
                   <pre className="p-3 bg-[#0c1220] rounded-lg text-[9.5px] font-mono text-cyan-400/90 leading-relaxed overflow-x-auto max-h-56">
                     {supabaseSQLCode}
                   </pre>
+                </div>
+              )}
+            </div>
+
+            {/* Sincronización de Datos (Local ⇄ Cloud) */}
+            <div className="bg-[#142036]/40 border border-[#1e2d44]/70 rounded-xl p-4 space-y-3 mt-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-white flex items-center gap-1.5 font-display">
+                  <Activity size={13} className="text-emerald-400 stroke-[2.2]" />
+                  Migración de Datos (Local ⇄ Supabase Cloud)
+                </span>
+                <span className="text-[9px] font-mono text-slate-500 font-extrabold uppercase">PRO ENGINE</span>
+              </div>
+              <p className="text-[10.5px] text-slate-400 leading-relaxed font-sans">
+                Empuja las campañas, prospectos del CRM, servicios y estadísticas de tu sandbox local (<code className="text-slate-300">data-store.json</code>) directamente a las tablas de producción remota de tu proyecto Supabase.
+              </p>
+              
+              <button
+                onClick={handleSyncToSupabase}
+                disabled={syncing || supabaseConfig.status !== "connected_real"}
+                className={`w-full py-2.5 px-3 rounded-xl text-xs font-bold font-display flex items-center justify-center gap-1.5 transition-all duration-300 ${
+                  supabaseConfig.status === "connected_real"
+                    ? "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg shadow-emerald-950/20 active:scale-[0.98]"
+                    : "bg-[#101420] text-slate-600 border border-slate-800/60 cursor-not-allowed"
+                }`}
+              >
+                {syncing ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    Migrando datos a Supabase...
+                  </>
+                ) : (
+                  <>
+                    <Database size={13} />
+                    {supabaseConfig.status === "connected_real" 
+                      ? "Exportar Datos Locales a Supabase" 
+                      : "Migración Deshabilitada (Faltan variables .env)"}
+                  </>
+                )}
+              </button>
+
+              {syncResult && (
+                <div className="bg-[#080c14] border border-emerald-500/20 p-3.5 rounded-xl space-y-2 text-[10.5px] font-mono text-emerald-400 animate-slide-up">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <CheckCircle size={12} />
+                    {syncResult.message}
+                  </p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-slate-400 text-[10px] pl-1.5 border-l border-emerald-500/30">
+                    {syncResult.summary?.services !== undefined && <span>Servicios: {syncResult.summary.services}</span>}
+                    {syncResult.summary?.campaigns !== undefined && <span>Campañas: {syncResult.summary.campaigns}</span>}
+                    {syncResult.summary?.ig_accounts !== undefined && <span>Cuentas Satélite: {syncResult.summary.ig_accounts}</span>}
+                    {syncResult.summary?.contacts !== undefined && <span>Prospectos CRM: {syncResult.summary.contacts}</span>}
+                  </div>
                 </div>
               )}
             </div>

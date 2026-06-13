@@ -63,6 +63,7 @@ export default function App() {
 
   // CRM State
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set());
   const [crmSearch, setCrmSearch] = useState<string>("");
   const [crmFilter, setCrmFilter] = useState<string>("all");
   const [simulatorMessage, setSimulatorMessage] = useState<string>("");
@@ -295,6 +296,32 @@ export default function App() {
   };
 
   // --- CRM & Interactive Simulator Actions ---
+  const handleBulkStatusUpdate = async (newStatus: "lost" | "qualified" | "contacted" | "new") => {
+    if (selectedContactIds.size === 0) return;
+    
+    const idsToUpdate = Array.from(selectedContactIds);
+    setLoading(true);
+    try {
+      const response = await fetch('/api/contacts/bulk-status', {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: idsToUpdate, status: newStatus })
+      });
+      if (response.ok) {
+        setContacts(prev => prev.map(c => idsToUpdate.includes(c.id) ? { ...c, status: newStatus } : c));
+        setSelectedContactIds(new Set());
+        triggerActionNotice(`Status updated for ${idsToUpdate.length} contacts`, "success");
+      } else {
+        triggerActionNotice("Failed to update contacts", "error");
+      }
+    } catch(err) {
+      console.error(err);
+      triggerActionNotice("Error performing bulk update", "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSaveContactNotes = async (contactId: string, notes: string) => {
     try {
       await fetch(`/api/contacts/${contactId}`, {
@@ -451,14 +478,31 @@ export default function App() {
 
   // Filtered contacts
   const filteredContacts = contacts.filter(contact => {
+    const lowerSearch = crmSearch.toLowerCase();
     const matchesSearch = 
-      contact.name.toLowerCase().includes(crmSearch.toLowerCase()) ||
-      contact.handle.toLowerCase().includes(crmSearch.toLowerCase()) ||
-      contact.businessType.toLowerCase().includes(crmSearch.toLowerCase());
+      (contact.name || "").toLowerCase().includes(lowerSearch) ||
+      (contact.handle || "").toLowerCase().includes(lowerSearch) ||
+      (contact.businessType || "").toLowerCase().includes(lowerSearch);
       
     const matchesFilter = crmFilter === "all" || contact.status === crmFilter;
     return matchesSearch && matchesFilter;
   });
+
+  const highlightText = (text: string, highlight: string) => {
+    if (!text) return null;
+    if (!highlight.trim()) {
+      return <span>{text}</span>;
+    }
+    const regex = new RegExp(`(${highlight})`, 'gi');
+    const parts = text.split(regex);
+    return (
+      <span>
+        {parts.map((part, i) => 
+          regex.test(part) ? <mark key={i} className="bg-cyan-500/30 text-cyan-400 rounded-sm italic px-0.5">{part}</mark> : <span key={i}>{part}</span>
+        )}
+      </span>
+    );
+  };
 
   return (
     <div className="flex h-screen bg-navy-900 text-slate-100 font-sans overflow-hidden">
@@ -1259,53 +1303,99 @@ export default function App() {
                         </button>
                       ))}
                     </div>
+
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between pt-2 border-t border-[#1e2d44] gap-2">
+                      <label className="flex items-center gap-2 cursor-pointer w-fit p-1 pr-2 hover:bg-[#142036] rounded transition-colors">
+                        <input
+                          type="checkbox"
+                          className="w-3.5 h-3.5 rounded border-slate-600 bg-transparent text-cyan-500 mt-0.5"
+                          checked={filteredContacts.length > 0 && selectedContactIds.size === filteredContacts.length}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              const newSet = new Set(filteredContacts.map(c => c.id));
+                              setSelectedContactIds(newSet);
+                            } else {
+                              setSelectedContactIds(new Set());
+                            }
+                          }}
+                        />
+                        <span className="text-[10px] text-slate-400 font-display">Seleccionar Visibles</span>
+                      </label>
+
+                      {selectedContactIds.size > 0 && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[10px] font-display font-medium text-slate-400">{selectedContactIds.size} seleccionados</span>
+                          <button onClick={() => handleBulkStatusUpdate('qualified')} className="px-2 py-1 bg-purple-500/10 border border-purple-500/20 text-purple-400 text-[10px] font-bold rounded hover:bg-purple-500/20 transition-colors">Cualificar</button>
+                          <button onClick={() => handleBulkStatusUpdate('lost')} className="px-2 py-1 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] font-bold rounded hover:bg-rose-500/20 transition-colors">Registrar Pérdida</button>
+                          <button onClick={() => handleBulkStatusUpdate('contacted')} className="px-2 py-1 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-[10px] font-bold rounded hover:bg-cyan-500/20 transition-colors">A Contactado</button>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* List */}
                   <div className="flex-1 overflow-y-auto divide-y divide-[#1e2d44]/30">
                     {filteredContacts.map(c => {
                       const isSelected = selectedContact?.id === c.id;
+                      const isChecked = selectedContactIds.has(c.id);
                       const srv = services.find(s => s.id === c.serviceId);
                       return (
                         <div 
                           key={c.id}
-                          onClick={() => {
-                            setSelectedContact(c);
-                            setSimulatorMessage("");
-                          }}
-                          className={`p-4 cursor-pointer transition-colors ${
+                          className={`p-4 transition-colors relative ${
                             isSelected ? "bg-[#142036]" : "hover:bg-[#0e1422]/50"
                           }`}
                         >
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <p className="text-xs font-mono text-slate-400 font-semibold">{c.handle}</p>
-                              <h4 className="text-sm font-display font-bold text-white mt-0.5">{c.name}</h4>
-                              <p className="text-[10px] text-slate-500">{c.businessType}</p>
-                            </div>
+                          <div className="flex items-start gap-3">
+                            <input 
+                              type="checkbox" 
+                              checked={isChecked}
+                              onChange={(e) => {
+                                const newSet = new Set(selectedContactIds);
+                                if (e.target.checked) newSet.add(c.id);
+                                else newSet.delete(c.id);
+                                setSelectedContactIds(newSet);
+                              }}
+                              className="w-3.5 h-3.5 mt-0.5 rounded border-slate-600 bg-transparent text-cyan-500"
+                            />
+                            <div 
+                              className="flex-1 cursor-pointer"
+                              onClick={() => {
+                                setSelectedContact(c);
+                                setSimulatorMessage("");
+                              }}
+                            >
+                              <div className="flex items-start justify-between">
+                                <div>
+                                  <p className="text-xs font-mono text-slate-400 font-semibold">{highlightText(c.handle, crmSearch)}</p>
+                                  <h4 className="text-sm font-display font-bold text-white mt-0.5">{highlightText(c.name, crmSearch)}</h4>
+                                  <p className="text-[10px] text-slate-500">{c.businessType}</p>
+                                </div>
                             
-                            <div className="flex flex-col items-end gap-1">
-                              <span className={`text-[9px] font-display font-bold px-2 py-0.5 rounded-full border ${
-                                c.status === "scheduled"
-                                  ? "text-amber-400 bg-amber-400/10 border-amber-400/20"
-                                  : c.status === "qualified"
-                                  ? "text-purple-400 bg-purple-400/10 border-purple-400/20"
-                                  : c.status === "lost"
-                                  ? "text-rose-400 bg-rose-400/10 border-rose-400/20"
-                                  : "text-slate-400 bg-slate-400/10 border-slate-500/20"
-                              }`}>
-                                {c.status === "scheduled" ? "Agendado" : c.status === "qualified" ? "Calificado" : c.status === "lost" ? "Fallo" : "Prospecto"}
-                              </span>
-                              <span className="text-[9px] text-slate-600 font-mono">{c.lastContact}</span>
+                                <div className="flex flex-col items-end gap-1">
+                                  <span className={`text-[9px] font-display font-bold px-2 py-0.5 rounded-full border ${
+                                    c.status === "scheduled"
+                                      ? "text-amber-400 bg-amber-400/10 border-amber-400/20"
+                                      : c.status === "qualified"
+                                      ? "text-purple-400 bg-purple-400/10 border-purple-400/20"
+                                      : c.status === "lost"
+                                      ? "text-rose-400 bg-rose-400/10 border-rose-400/20"
+                                      : "text-slate-400 bg-slate-400/10 border-slate-500/20"
+                                  }`}>
+                                    {c.status === "scheduled" ? "Agendado" : c.status === "qualified" ? "Calificado" : c.status === "lost" ? "Fallo" : "Prospecto"}
+                                  </span>
+                                  <span className="text-[9px] text-slate-600 font-mono">{c.lastContact}</span>
+                                </div>
+                              </div>
+
+                              {srv && (
+                                <div className="mt-2.5 flex items-center gap-1.5">
+                                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: srv.color }} />
+                                  <span className="text-[9px] text-slate-500 uppercase tracking-wider">{srv.name}</span>
+                                </div>
+                              )}
                             </div>
                           </div>
-
-                          {srv && (
-                            <div className="mt-2.5 flex items-center gap-1.5">
-                              <span className="w-1.5 h-1.5 rounded-full" style={{ background: srv.color }} />
-                              <span className="text-[9px] text-slate-500 uppercase tracking-wider">{srv.name}</span>
-                            </div>
-                          )}
                         </div>
                       );
                     })}

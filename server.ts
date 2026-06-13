@@ -224,6 +224,17 @@ app.post("/api/contacts", (req, res) => {
   res.json({ success: true, contact: newContact });
 });
 
+app.put("/api/contacts/bulk-status", (req, res) => {
+  const { ids, status } = req.body;
+  if (!Array.isArray(ids) || !status) {
+    return res.status(400).json({ success: false, error: "Invalid payload" });
+  }
+  const store = getStore();
+  store.contacts = store.contacts.map(c => ids.includes(c.id) ? { ...c, status } : c);
+  saveStore(store);
+  res.json({ success: true });
+});
+
 app.put("/api/contacts/:id", (req, res) => {
   const store = getStore();
   store.contacts = store.contacts.map(c => c.id === req.params.id ? { ...c, ...req.body } : c);
@@ -825,6 +836,142 @@ app.post("/api/webhook-events/clear", (req, res) => {
   store.webhookEvents = [];
   saveStore(store);
   res.json({ success: true, message: "Historial de Webhooks simulados limpiado." });
+});
+
+// POST /api/supabase/sync - Pushes local sandbox store into production Supabase DB
+app.post("/api/supabase/sync", async (req, res) => {
+  if (!supabase) {
+    return res.status(400).json({
+      success: false,
+      message: "El cliente de Supabase no está configurado o conectado. Por favor, asegúrate de proporcionar SUPABASE_ANON_KEY en tu archivo .env"
+    });
+  }
+
+  const store = getStore();
+  const summary: any = {};
+
+  try {
+    // 1. Sync Services
+    if (store.services && store.services.length > 0) {
+      const servicesData = store.services.map(s => ({
+        id: s.id,
+        name: s.name,
+        ai_prompt: s.aiPrompt,
+        calendar_url: s.calendarLink,
+        avatar: s.avatar || "",
+        color: s.color || "#00C8F0",
+        created_at: s.createdAt ? new Date(s.createdAt).toISOString() : new Date().toISOString()
+      }));
+
+      const { error: sError } = await supabase.from("services").upsert(servicesData);
+      if (sError) {
+        throw new Error(`Error en tabla 'services': ${sError.message}. Asegúrate de ejecutar primero la estructura SQL en el editor de Supabase.`);
+      }
+      summary.services = servicesData.length;
+    }
+
+    // 2. Sync IG Accounts
+    if (store.accounts && store.accounts.length > 0) {
+      const accountsData = store.accounts.map(a => ({
+        id: a.id,
+        handle: a.handle,
+        status: a.status,
+        daily_limit: a.limit,
+        sent_today: a.sentToday,
+        reset_at: new Date().toISOString()
+      }));
+
+      const { error: aError } = await supabase.from("ig_accounts").upsert(accountsData);
+      if (aError) {
+        throw new Error(`Error en tabla 'ig_accounts': ${aError.message}`);
+      }
+      summary.ig_accounts = accountsData.length;
+    }
+
+    // 3. Sync Campaigns
+    if (store.campaigns && store.campaigns.length > 0) {
+      const campaignsData = store.campaigns.map(c => ({
+        id: c.id,
+        name: c.name,
+        service_id: c.serviceId,
+        status: c.status,
+        messages_sent: c.messagesSent || 0,
+        replies: c.replies || 0,
+        qualified: c.qualified || 0,
+        scheduled: c.scheduled || 0,
+        initial_message: c.initialMessage || "",
+        start_date: c.startDate ? new Date(c.startDate).toISOString().split("T")[0] : new Date().toISOString().split("T")[0],
+        last_active: c.lastActive || "Justo ahora"
+      }));
+
+      const { error: cError } = await supabase.from("campaigns").upsert(campaignsData);
+      if (cError) {
+        throw new Error(`Error en tabla 'campaigns': ${cError.message}`);
+      }
+      summary.campaigns = campaignsData.length;
+
+      // 4. Sync Campaign Accounts pairings
+      const campaignAccountsData: any[] = [];
+      store.campaigns.forEach(c => {
+        if (c.accounts && Array.isArray(c.accounts)) {
+          c.accounts.forEach(accId => {
+            campaignAccountsData.push({
+              campaign_id: c.id,
+              account_id: accId
+            });
+          });
+        }
+      });
+
+      if (campaignAccountsData.length > 0) {
+        const { error: caError } = await supabase.from("campaign_accounts").upsert(campaignAccountsData);
+        if (caError) {
+          throw new Error(`Error en tabla pivot 'campaign_accounts': ${caError.message}`);
+        }
+        summary.campaign_accounts = campaignAccountsData.length;
+      }
+    }
+
+    // 5. Sync Contacts
+    if (store.contacts && store.contacts.length > 0) {
+      const contactsData = store.contacts.map(c => ({
+        id: c.id,
+        ig_handle: c.handle,
+        name: c.name,
+        status: c.status,
+        conv_stage: c.conv_stage || "intro",
+        conv_answers: c.conv_answers || {},
+        conv_summary: c.conv_summary || "",
+        objections: c.objections || [],
+        appointment_at: c.appointmentDate ? new Date(c.appointmentDate).toISOString() : null,
+        service_id: c.serviceId || null,
+        campaign_id: c.campaignId || null,
+        notes: c.notes || "",
+        created_at: c.createdAt ? new Date(c.createdAt).toISOString() : new Date().toISOString(),
+        last_contact_at: c.lastContact && c.lastContact !== "Justo ahora" 
+          ? new Date(c.lastContact).toISOString() 
+          : new Date().toISOString()
+      }));
+
+      const { error: ctError } = await supabase.from("contacts").upsert(contactsData);
+      if (ctError) {
+        throw new Error(`Error en tabla 'contacts': ${ctError.message}`);
+      }
+      summary.contacts = contactsData.length;
+    }
+
+    res.json({
+      success: true,
+      message: "¡Sincronización exitosa con tu base de datos de Supabase en São Paulo!",
+      summary
+    });
+  } catch (error: any) {
+    console.error("[Supabase Sync Processor Error]:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Fallo inesperado al migrar datos a Supabase."
+    });
+  }
 });
 
 // GET /api/supabase-config - Expose active orchestration state to UI
