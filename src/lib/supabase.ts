@@ -8,3 +8,18 @@ if (!supabaseUrl || !supabaseAnonKey) {
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+export const getAuthenticatedUserId = async () => {
+  const { data: { user } } = await supabase.auth.getUser();
+  return user?.id;
+};
+
+/**
+ * Wrapper for Supabase insert that automatically attaches the current user_id.
+ */
+export const insertAuthenticated = async (table: string, data: any) => {
+  const userId = await getAuthenticatedUserId();
+  if (!userId) throw new Error("No authenticated user found");
+  
+  return supabase.from(table).insert({ ...data, user_id: userId });
+};
