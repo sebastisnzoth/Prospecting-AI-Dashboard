@@ -35,7 +35,8 @@ import {
   Terminal,
   Globe,
   Copy,
-  Check
+  Check,
+  LogOut
 } from "lucide-react";
 import { Service, IGAccount, Campaign, Contact, DailyStat, Message } from "./types";
 import CalendarView from "./components/CalendarView";
@@ -660,6 +661,13 @@ export default function App() {
               <div className="w-2.5 h-2.5 rounded-full bg-cyan-400"></div>
               <span className="text-xs font-mono font-medium text-slate-300">Sebastian</span>
             </div>
+            <button 
+              onClick={() => supabase.auth.signOut()}
+              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-950/20 rounded-xl transition-all"
+              title="Cerrar Sesión"
+            >
+              <LogOut size={16} />
+            </button>
           </div>
         </header>
 
