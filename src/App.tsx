@@ -88,6 +88,7 @@ export default function App() {
 
   // Webhook Simulator & Supabase states
   const [webhookLogs, setWebhookLogs] = useState<any[]>([]);
+  const [reportDateRange, setReportDateRange] = useState<number>(7);
   const [supabaseConfig, setSupabaseConfig] = useState<any>({
     url: "https://ftyvtfnvechetczhcbfe.supabase.co",
     hasApiKey: false,
@@ -129,9 +130,19 @@ export default function App() {
         if (whResponse.ok) {
           const whData = await whResponse.json();
           setWebhookLogs(whData || []);
+        } else {
+          console.warn("Failed to load webhook logs, status:", whResponse.status);
         }
       } catch (err) {
-        console.error("Error loading webhook logs:", err);
+        console.error("Error loading webhook logs:", err);                
+        // Maybe try again after a small delay?
+        setTimeout(async () => {
+             const whResponse = await fetch("/api/webhook-events");
+             if (whResponse.ok) {
+                 const whData = await whResponse.json();
+                 setWebhookLogs(whData || []);
+             }
+        }, 2000);
       }
 
       // Fetch active Supabase config
@@ -495,6 +506,14 @@ export default function App() {
   const conversionRate = totalSent > 0 ? ((totalScheduled / totalSent) * 100).toFixed(2) : "0.00";
   const replyRate = totalSent > 0 ? ((totalReplies / totalSent) * 100).toFixed(1) : "0.0";
   const qualifRate = totalReplies > 0 ? ((totalQualified / totalReplies) * 100).toFixed(1) : "0";
+
+  const filteredStats = stats.slice(-reportDateRange);
+  const fSent = filteredStats.reduce((a, s) => a + s.sent, 0);
+  const fReplies = filteredStats.reduce((a, s) => a + s.replies, 0);
+  const fQualified = filteredStats.reduce((a, s) => a + s.qualified, 0);
+  const fScheduled = filteredStats.reduce((a, s) => a + s.scheduled, 0);
+  const fConversionRate = fSent > 0 ? ((fScheduled / fSent) * 100).toFixed(2) : "0.00";
+  const fReplyRate = fSent > 0 ? ((fReplies / fSent) * 100).toFixed(1) : "0.0";
 
   // Filtered contacts
   const filteredContacts = contacts.filter(contact => {
@@ -1652,17 +1671,29 @@ export default function App() {
                   </div>
 
                   <div className="flex bg-[#142036] border border-[#1e2d44] rounded-xl p-0.5 text-xs font-mono">
-                    <span className="px-3 py-1 bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 rounded-lg">Últimos 12 Días</span>
+                    {[7, 30, 90].map((days) => (
+                      <button
+                        key={days}
+                        onClick={() => setReportDateRange(days)}
+                        className={`px-3 py-1 rounded-lg transition ${
+                          reportDateRange === days
+                            ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/20"
+                            : "text-slate-500 hover:text-slate-300"
+                        }`}
+                      >
+                        {days} Días
+                      </button>
+                    ))}
                   </div>
                 </div>
 
                 {/* KPI block Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   {[
-                    { label: "Tasa de Cierre Global", value: `${conversionRate}%`, desc: "Inicios a Cita Agendada", color: "text-[#00C8F0]" },
-                    { label: "Ratio Respuestas", value: `${replyRate}%`, desc: "Interés inicial sobre envíos", color: "text-purple-400" },
-                    { label: "Citas por cada 1K", value: (totalSent > 0 ? (totalScheduled / totalSent * 1000).toFixed(1) : "0"), desc: "Capacidad de escala", color: "text-emerald-400" },
-                    { label: "Citas Agendadas", value: totalScheduled, desc: "Reuniones comerciales cerradas", color: "text-amber-500" }
+                    { label: "Tasa de Cierre Global", value: `${fConversionRate}%`, desc: "Inicios a Cita Agendada", color: "text-[#00C8F0]" },
+                    { label: "Ratio Respuestas", value: `${fReplyRate}%`, desc: "Interés inicial sobre envíos", color: "text-purple-400" },
+                    { label: "Citas por cada 1K", value: (fSent > 0 ? (fScheduled / fSent * 1000).toFixed(1) : "0"), desc: "Capacidad de escala", color: "text-emerald-400" },
+                    { label: "Citas Agendadas", value: fScheduled, desc: "Reuniones comerciales cerradas", color: "text-amber-500" }
                   ].map((kpi, idx) => (
                     <div key={idx} className="bg-[#0e1422] border border-[#1e2d44] rounded-2xl p-4 text-center">
                       <span className="text-[10px] text-slate-500 font-display uppercase tracking-wider font-semibold block">{kpi.label}</span>
@@ -1755,7 +1786,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#1e2d44]/30">
-                        {stats.map(s => (
+                        {filteredStats.map(s => (
                           <tr key={s.date} className="hover:bg-[#142036]/20 transition">
                             <td className="py-2 text-slate-400 font-semibold">{s.date}</td>
                             <td className="py-2 text-slate-300">{s.sent.toLocaleString()}</td>
